@@ -19,11 +19,34 @@ re-entered later the same day.
 **This trades real money with no human approval step once live.** Read this
 whole file before running it.
 
+A human doing this manually would check more than one place — Robinhood,
+Webull, social chatter — before acting. This isn't institutional-grade
+infrastructure (no colocated execution, no proprietary data feeds, no
+research desk behind it), but it's the honest, buildable version of that:
+more than one source for the candidate universe, a real chatter signal,
+and a weighted composite score instead of a single threshold deciding
+what to trade.
+
 ## How it works
 
-- `src/scanner.py` — polls Robinhood's top up-movers, filters to symbols
-  matching your price range, minimum intraday gain, and relative volume
-  (today's volume vs. average) from `config.yaml`.
+- `src/scanner.py` — builds the candidate universe from Robinhood's top
+  up-movers (plus Webull's, if `enable_webull_source` is on), filters to
+  symbols matching your price range, minimum intraday gain, and relative
+  volume (today's volume vs. average) from `config.yaml`.
+- `src/social_signal.py` — a real social-chatter signal from StockTwits'
+  public API (message volume, trending status) — the actual place this
+  kind of chatter lives, not a generic web search. It's a scoring input,
+  not a hard filter: the strategy explicitly allows for moves with no
+  visible catalyst at all.
+- `src/webull_source.py` — optional secondary universe via the unofficial
+  `webull` package. Off by default; it's a reverse-engineered API that
+  drifts between versions, so verify it against current docs before
+  relying on it (see the file for details).
+- Every qualifying candidate gets a weighted **composite score**
+  (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz`
+  in `config.yaml`) combining day gain, relative volume, recent
+  continuation, and chatter — candidates are ranked and entered by this
+  score, not raw gain alone.
 - `src/momentum_tracker.py` — keeps a short rolling history of price/volume
   per symbol across scan cycles. A name only qualifies if it shows real
   movement in the last few cycles (`momentum_lookback_cycles`), not just a

@@ -1,6 +1,8 @@
 import robin_stocks.robinhood as r
 
 from .momentum_tracker import MomentumTracker
+from .social_signal import get_buzz
+from .webull_source import get_webull_gainer_symbols
 
 
 def _to_float(x):
@@ -80,30 +82,51 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
             log.info("%s: recent volume flow too thin (%.0f shares), skipping", symbol, recent_volume_change)
             return None
 
+    # Social chatter is a scoring input, not a hard gate - the strategy
+    # explicitly allows for "seemingly no clear reason at all", so zero
+    # buzz doesn't disqualify a candidate, it just scores lower on this
+    # one component below.
+    buzz = {"messages_recent": 0, "trending": False}
+    if cfg.get("enable_social_signal", True):
+        buzz = get_buzz(symbol, log)
+
+    recent_price_change = change["price_change_pct"] if change else None
+    score = (
+        gain_pct * cfg.get("weight_gain", 1.0)
+        + (relative_volume or 0.0) * cfg.get("weight_relvol", 0.05)
+        + (recent_price_change or 0.0) * cfg.get("weight_continuation", 2.0)
+        + min(buzz["messages_recent"] / 20, 1.0) * cfg.get("weight_buzz", 0.5)
+        + (cfg.get("weight_buzz", 0.5) if buzz["trending"] else 0.0)
+    )
+
     return {
         "symbol": symbol,
         "last_price": last_price,
         "prev_close": prev_close,
         "gain_pct": gain_pct,
         "relative_volume": relative_volume,
+        "buzz_messages_recent": buzz["messages_recent"],
+        "trending": buzz["trending"],
+        "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }
 
 
 def get_runner_candidates(cfg: dict, log, tracker: MomentumTracker) -> list[dict]:
-    """Scan Robinhood's top up-movers and return the subset that pass the
-    runner filters in config.yaml, including the continuation check."""
+    """Build a symbol universe from every enabled source (Robinhood's top
+    up-movers, plus Webull's if enabled), then return the subset that pass
+    the runner filters in config.yaml, including the continuation check."""
     try:
         movers = r.markets.get_top_movers(direction="up") or []
     except Exception as e:
-        log.warning("Failed to fetch top movers: %s", e)
-        return []
+        log.warning("Failed to fetch Robinhood top movers: %s", e)
+        movers = []
+
+    symbols = {m.get("symbol") for m in movers if m.get("symbol")}
+    symbols |= set(get_webull_gainer_symbols(cfg, log))
 
     candidates = []
-    for m in movers:
-        symbol = m.get("symbol")
-        if not symbol:
-            continue
+    for symbol in symbols:
         try:
             candidate = evaluate_symbol(symbol, cfg, log, tracker)
         except Exception as e:

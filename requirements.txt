@@ -3,3 +3,8 @@ pyotp==2.9.0
 python-dotenv==1.0.1
 PyYAML==6.0.2
 pytz==2024.1
+requests==2.32.3
+
+# Optional, only needed if you set enable_webull_source: true in
+# config.yaml - unofficial/community package, verify current API before
+# relying on it. Install manually: pip install webull

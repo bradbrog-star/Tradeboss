@@ -92,3 +92,31 @@ min_recent_volume_shares: 5000       # >= this many shares traded in that window
 # and reignite for a second wave later in the session.
 entry_window_start_et: "09:30"
 entry_window_end_et: "15:45"
+
+# --- Additional sources / "the whole picture" -----------------------------
+# Robinhood's top-movers list alone is a small curated set. These widen the
+# universe and add a real chatter signal, closer to how a human scans
+# multiple places before acting.
+
+# Best-effort secondary universe from the unofficial `webull` package.
+# Off by default - see src/webull_source.py for why, and what to check
+# before turning it on.
+enable_webull_source: false
+
+# Social chatter signal from StockTwits' public API (see src/social_signal.py).
+# This is a SCORING input, not a hard requirement - per the strategy, some
+# runners have no visible catalyst at all.
+enable_social_signal: true
+
+# --- Composite conviction score --------------------------------------------
+# Candidates are ranked by a weighted score instead of raw day-gain alone,
+# so the bot picks the strongest overall setup first when several
+# candidates qualify at once. Tune these weights to taste; they're
+# deliberately scaled so no single component dominates by default given
+# typical magnitudes (gain_pct ~0.15-2+, relative_volume ~3-20+,
+# recent price change ~0.03-0.5+, buzz message count is capped at 1.0
+# internally before weighting).
+weight_gain: 1.0
+weight_relvol: 0.05
+weight_continuation: 2.0
+weight_buzz: 0.5

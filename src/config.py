@@ -39,6 +39,12 @@ def load_config() -> dict:
         "min_recent_volume_shares",
         "entry_window_start_et",
         "entry_window_end_et",
+        "enable_webull_source",
+        "enable_social_signal",
+        "weight_gain",
+        "weight_relvol",
+        "weight_continuation",
+        "weight_buzz",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:

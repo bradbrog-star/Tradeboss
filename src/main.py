@@ -135,7 +135,7 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         return
 
     candidates = get_runner_candidates(cfg, log, tracker)
-    candidates.sort(key=lambda c: c["gain_pct"], reverse=True)
+    candidates.sort(key=lambda c: c["score"], reverse=True)
 
     for candidate in candidates:
         if not risk.can_open_new_position():
@@ -149,11 +149,14 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
             continue
 
         log.info(
-            "Candidate %s: last $%.2f (+%.1f%% today), rel volume %s",
+            "Candidate %s: score %.2f, last $%.2f (+%.1f%% today), rel volume %s, buzz %d msgs%s",
             symbol,
+            candidate["score"],
             candidate["last_price"],
             candidate["gain_pct"] * 100,
             f"{candidate['relative_volume']:.1f}x" if candidate["relative_volume"] else "n/a",
+            candidate["buzz_messages_recent"],
+            " (trending)" if candidate["trending"] else "",
         )
         result = executor.enter_position(symbol, candidate["ask_price"], dollar_amount, dry_run, log)
         if result:
