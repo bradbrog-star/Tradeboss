@@ -36,8 +36,10 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
     float_adjusted_relative_volume REAL,
     buzz_messages_recent INTEGER,
     trending INTEGER,
+    market_cap REAL,
     spread_pct REAL,
     bid_ask_imbalance REAL,
+    rsi REAL,
     score REAL,
     entered INTEGER
 );
@@ -68,7 +70,9 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_score REAL,
     entry_float_shares REAL,
     entry_rotations_since_open REAL,
-    entry_buzz_messages_recent REAL
+    entry_buzz_messages_recent REAL,
+    entry_market_cap REAL,
+    entry_rsi REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_symbol_ts ON candidate_snapshots(symbol, ts);
@@ -100,8 +104,9 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     float_shares, float_source, float_stale, float_stale_reasons,
                     rotations_since_open, recent_turnover_rate,
                     float_adjusted_relative_volume, buzz_messages_recent,
-                    trending, spread_pct, bid_ask_imbalance, score, entered)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    trending, market_cap, spread_pct, bid_ask_imbalance, rsi,
+                    score, entered)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     _now_iso(),
                     candidate["symbol"],
@@ -118,8 +123,10 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     candidate.get("float_adjusted_relative_volume"),
                     candidate.get("buzz_messages_recent"),
                     int(bool(candidate.get("trending"))),
+                    candidate.get("market_cap"),
                     candidate.get("spread_pct"),
                     candidate.get("bid_ask_imbalance"),
+                    candidate.get("rsi"),
                     candidate.get("score"),
                     int(entered),
                 ),
@@ -184,8 +191,9 @@ def log_trade(
                    (symbol, entry_ts, entry_price, qty, exit_ts, exit_price,
                     exit_reason, exit_category, pnl, peak_price, trough_price,
                     mfe_pct, mae_pct, dry_run, entry_score, entry_float_shares,
-                    entry_rotations_since_open, entry_buzz_messages_recent)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    entry_rotations_since_open, entry_buzz_messages_recent,
+                    entry_market_cap, entry_rsi)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     symbol,
                     entry_ts,
@@ -205,6 +213,8 @@ def log_trade(
                     entry_meta.get("float_shares"),
                     entry_meta.get("rotations_since_open"),
                     entry_meta.get("buzz_messages_recent"),
+                    entry_meta.get("market_cap"),
+                    entry_meta.get("rsi"),
                 ),
             )
     except Exception as e:

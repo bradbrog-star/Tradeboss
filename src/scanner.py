@@ -6,6 +6,7 @@ from .float_metrics import compute_effective_float_metrics
 from .level2 import get_order_book
 from .momentum_tracker import MomentumTracker
 from .social_signal import get_buzz
+from .technical_indicators import get_rsi
 from .webull_source import get_webull_gainer_symbols
 
 
@@ -128,6 +129,17 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     elif cfg.get("min_float_shares") or cfg.get("max_float_shares"):
         log.info("%s: float unknown, can't apply float size filter - not disqualifying", symbol)
 
+    # Market cap = price x shares outstanding, from the same float-provider
+    # lookup above (no extra API call). "Tiny market cap" from the
+    # strategy is mostly already implied by the price/float bounds, so
+    # this is exposed as an optional hard ceiling and for logging, not
+    # folded into the score (would just double-count size against float).
+    shares_outstanding = float_record.get("shares_outstanding")
+    market_cap = shares_outstanding * last_price if shares_outstanding else None
+    max_market_cap = cfg.get("max_market_cap_usd")
+    if max_market_cap and market_cap is not None and market_cap > max_market_cap:
+        return None
+
     # Level II (Nasdaq-listed only, needs Robinhood Gold - see level2.py).
     # A hard spread gate here is a real execution-quality check: entries
     # are limit orders just above the ask (executor.py), so a stock with
@@ -142,6 +154,14 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
             )
             return None
 
+    # RSI, computed locally from Robinhood's own intraday candles (no new
+    # vendor). This is a momentum-CONFIRMATION input, not an "overbought,
+    # avoid" filter - consistent with the strategy's own framing that a
+    # stock isn't automatically too late just because it's already run.
+    rsi = None
+    if cfg.get("enable_rsi", True):
+        rsi = get_rsi(symbol, log)
+
     recent_price_change = change["price_change_pct"] if change else None
     score = (
         gain_pct * cfg.get("weight_gain", 1.0)
@@ -151,6 +171,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         + (cfg.get("weight_buzz", 0.5) if buzz["trending"] else 0.0)
         + (float_metrics["day_turnover"] or 0.0) * cfg.get("weight_float_turnover", 1.0)
         + (order_book["bid_ask_imbalance"] or 0.0 if order_book else 0.0) * cfg.get("weight_l2_imbalance", 0.5)
+        + ((rsi / 100) if rsi is not None else 0.0) * cfg.get("weight_rsi", 0.5)
     )
 
     return {
@@ -169,8 +190,10 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         "rotations_since_open": float_metrics["rotations_since_open"],
         "recent_turnover_rate": float_metrics["recent_turnover_rate"],
         "float_adjusted_relative_volume": float_metrics["float_adjusted_relative_volume"],
+        "market_cap": market_cap,
         "spread_pct": order_book["spread_pct"] if order_book else None,
         "bid_ask_imbalance": order_book["bid_ask_imbalance"] if order_book else None,
+        "rsi": rsi,
         "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }

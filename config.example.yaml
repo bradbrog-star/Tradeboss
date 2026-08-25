@@ -169,3 +169,17 @@ max_spread_pct: 0.15
 # Weight applied to bid/ask size imbalance in the composite score
 # (positive = more size stacked on the bid than the ask).
 weight_l2_imbalance: 0.5
+
+# --- Market cap ---------------------------------------------------------
+# Computed for free from price x shares_outstanding (already fetched for
+# float). "Tiny market cap" is mostly already implied by price/float
+# bounds above; this is an optional extra ceiling, not a new score input.
+# max_market_cap_usd: 50000000
+
+# --- RSI (src/technical_indicators.py) --------------------------------
+# Computed locally from Robinhood's own intraday candles - no separate
+# API/vendor needed. A momentum-CONFIRMATION input (higher RSI nudges the
+# score up), not an "overbought, avoid" filter - consistent with the
+# strategy's own framing that a stock isn't automatically too late.
+enable_rsi: true
+weight_rsi: 0.5

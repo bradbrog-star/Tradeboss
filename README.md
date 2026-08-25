@@ -75,12 +75,24 @@ what to trade.
   gate (`max_spread_pct`) that skips a candidate if its top-of-book
   spread is too wide for the limit-order entry to make sense, and a
   scoring input (`weight_l2_imbalance`) from bid/ask size imbalance.
+- `src/technical_indicators.py` — RSI, computed **locally** from
+  Robinhood's own intraday candles (`get_stock_historicals`, 5-minute
+  bars including extended hours) — no separate vendor. A standard
+  14-period Wilder's-smoothed RSI. This is a momentum-**confirmation**
+  input (higher RSI nudges the score up via `weight_rsi`), not an
+  "overbought, avoid" filter — consistent with the strategy's own framing
+  that a stock isn't automatically too late just because it already ran.
+- **Market cap**, computed free from price × `shares_outstanding` (same
+  float-provider lookup, no extra call). Mostly already implied by the
+  price/float bounds, so it's exposed for logging and an optional hard
+  ceiling (`max_market_cap_usd`) rather than folded into the score, which
+  would just double-count size against float.
 - Every qualifying candidate gets a weighted **composite score**
   (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz` /
-  `weight_float_turnover` / `weight_l2_imbalance` in `config.yaml`)
-  combining day gain, relative volume, recent continuation, chatter,
-  float turnover, and book imbalance — candidates are ranked and entered
-  by this score, not raw gain alone.
+  `weight_float_turnover` / `weight_l2_imbalance` / `weight_rsi` in
+  `config.yaml`) combining day gain, relative volume, recent
+  continuation, chatter, float turnover, book imbalance, and RSI —
+  candidates are ranked and entered by this score, not raw gain alone.
 - `src/momentum_tracker.py` — keeps a short rolling history of price/volume
   per symbol across scan cycles. A name only qualifies if it shows real
   movement in the last few cycles (`momentum_lookback_cycles`), not just a
@@ -192,6 +204,30 @@ Keep it running during market hours (a `screen`/`tmux` session, or a
 systemd/launchd service, or similar — it's a long-running process, not a
 one-shot script). It logs every decision to stdout and to
 `logs/tradeboss.log`.
+
+## Open research questions (not implemented - deliberately)
+
+Two claims that keep coming up but aren't backed by data yet, so they're
+NOT hard-coded into the bot. This is exactly what the runner/failure
+database (`state/tradeboss.db`) exists to answer once a real sample
+accumulates - see "runner/failure research database" above.
+
+- **"Best time of day is ~5am-9:45am ET."** Unproven, and only partly
+  actionable as stated: **Robinhood's own premarket window starts at
+  7:00 AM ET** (with Gold) for actual order execution - not 5am, no
+  matter what the data shows before then. Data from ~4am is more of a
+  Webull thing (`webull_source.py` already has an optional feed for
+  that). Also note: outside regular hours, Robinhood only accepts limit
+  orders - `executor.py`'s exits currently use market orders
+  (`order_sell_market`), which would simply get rejected in extended
+  hours. Enabling real premarket trading needs that fixed first, not
+  just widening `entry_window_start_et`.
+- **"Hold overnight if the data/news proves there's more to the run."**
+  This directly reverses the hard same-day/`force_exit_time_et` rule the
+  strategy is built around. Not implemented on a hunch - if you want
+  this, it should come from the database showing overnight gaps
+  net-favorable often enough to justify the added risk, not be added
+  speculatively.
 
 ## Known limitations (read before relying on this)
 

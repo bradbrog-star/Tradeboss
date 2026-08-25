@@ -180,14 +180,16 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         )
         log.info(
             "Candidate %s: score %.2f, last $%.2f (+%.1f%% today), rel volume %s, "
-            "float %s, rotations %s, buzz %d msgs%s",
+            "float %s, mkt cap %s, rotations %s, RSI %s, buzz %d msgs%s",
             symbol,
             candidate["score"],
             candidate["last_price"],
             candidate["gain_pct"] * 100,
             f"{candidate['relative_volume']:.1f}x" if candidate["relative_volume"] else "n/a",
             float_str,
+            f"${candidate['market_cap']:,.0f}" if candidate["market_cap"] else "unknown",
             f"{candidate['rotations_since_open']:.2f}x" if candidate["rotations_since_open"] else "n/a",
+            f"{candidate['rsi']:.0f}" if candidate["rsi"] is not None else "n/a",
             candidate["buzz_messages_recent"],
             " (trending)" if candidate["trending"] else "",
         )
@@ -198,6 +200,8 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
                 "float_shares": candidate["float_shares"],
                 "rotations_since_open": candidate["rotations_since_open"],
                 "buzz_messages_recent": candidate["buzz_messages_recent"],
+                "market_cap": candidate["market_cap"],
+                "rsi": candidate["rsi"],
             }
             risk.record_open(result["symbol"], result["qty"], result["price"], entry_meta)
             log_candidate_snapshot(candidate, entered=True, log=log)

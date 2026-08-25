@@ -55,6 +55,8 @@ def load_config() -> dict:
         "enable_level2",
         "max_spread_pct",
         "weight_l2_imbalance",
+        "enable_rsi",
+        "weight_rsi",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:
