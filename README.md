@@ -75,6 +75,19 @@ what to trade.
   gate (`max_spread_pct`) that skips a candidate if its top-of-book
   spread is too wide for the limit-order entry to make sense, and a
   scoring input (`weight_l2_imbalance`) from bid/ask size imbalance.
+- `src/alpaca_data.py` — an independent cross-check on Robinhood's own
+  price data via Alpaca's Market Data API (REST latest quote/trade).
+  **Off by default** (`enable_alpaca_cross_check`) — this is new code,
+  not yet exercised against live data, so it's a logged data-quality
+  flag (large Robinhood-vs-Alpaca price divergence) rather than
+  something folded into the score. Needs `ALPACA_API_KEY_ID` /
+  `ALPACA_API_SECRET_KEY` and an active subscription (Algo Trader Plus
+  recommended — the free tier is IEX-only, thin coverage for illiquid
+  microcaps). Deliberately does **not** implement Alpaca's real
+  trade-by-trade tape or LULD halt stream — those are websocket-only and
+  need a persistent-connection redesign; guessing at that message schema
+  under time pressure is exactly how a bug reaches a live account, so
+  it's a follow-up, not rushed in.
 - `src/technical_indicators.py` — RSI **and VWAP**, both computed
   **locally** from one shared fetch of Robinhood's own intraday candles
   (`get_stock_historicals`, 5-minute bars including extended hours) — no

@@ -216,3 +216,13 @@ weight_vwap: 1.0
 # scanner's other filters, so early-but-not-yet-qualifying moves are still
 # captured in first_detection_events.
 enable_detection_events: true
+
+# --- Alpaca cross-check (src/alpaca_data.py) ---------------------------
+# Off by default: this is new code, untested against live data. A DATA
+# QUALITY signal only - flags a large divergence between Robinhood's and
+# Alpaca's price for the same symbol - not folded into the score. Needs
+# ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY in .env and an active Alpaca
+# subscription. See README for what full tape/halt integration would
+# still need (Alpaca's websocket stream - not implemented here).
+enable_alpaca_cross_check: false
+alpaca_price_diff_alert_pct: 0.05

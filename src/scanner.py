@@ -1,5 +1,6 @@
 import robin_stocks.robinhood as r
 
+from .alpaca_data import get_cross_check as get_alpaca_cross_check
 from .database import log_halt_sighting
 from .detection_events import record_detections, record_first_social_mention
 from .float_data import get_float_record
@@ -184,6 +185,26 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         if vwap:
             price_vs_vwap_pct = (last_price - vwap) / vwap
 
+    # Alpaca cross-check: DATA QUALITY signal only, not a trading input -
+    # off by default. Flags a large divergence between Robinhood's and
+    # Alpaca's price for the same symbol at the same moment, which is
+    # worth knowing before trusting either broker's feed on a specific
+    # illiquid runner. Deliberately not folded into the score - this is
+    # new code, untested against live data.
+    alpaca_diff_pct = None
+    if cfg.get("enable_alpaca_cross_check"):
+        alpaca_check = get_alpaca_cross_check(symbol, last_price, log)
+        if alpaca_check and alpaca_check["diff_pct"] is not None:
+            alpaca_diff_pct = alpaca_check["diff_pct"]
+            if abs(alpaca_diff_pct) > cfg.get("alpaca_price_diff_alert_pct", 0.05):
+                log.warning(
+                    "%s: Robinhood $%.2f vs Alpaca $%.2f (%.1f%% diff) - data quality check",
+                    symbol,
+                    last_price,
+                    alpaca_check["alpaca_price"],
+                    alpaca_diff_pct * 100,
+                )
+
     recent_price_change = change["price_change_pct"] if change else None
     score = (
         gain_pct * cfg.get("weight_gain", 1.0)
@@ -219,6 +240,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         "rsi": rsi,
         "vwap": vwap,
         "price_vs_vwap_pct": price_vs_vwap_pct,
+        "alpaca_diff_pct": alpaca_diff_pct,
         "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }

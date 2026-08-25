@@ -62,6 +62,7 @@ def load_config() -> dict:
         "enable_detection_events",
         "observation_window_start_et",
         "observation_window_end_et",
+        "enable_alpaca_cross_check",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:
