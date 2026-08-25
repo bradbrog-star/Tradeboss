@@ -75,13 +75,20 @@ what to trade.
   gate (`max_spread_pct`) that skips a candidate if its top-of-book
   spread is too wide for the limit-order entry to make sense, and a
   scoring input (`weight_l2_imbalance`) from bid/ask size imbalance.
-- `src/technical_indicators.py` — RSI, computed **locally** from
-  Robinhood's own intraday candles (`get_stock_historicals`, 5-minute
-  bars including extended hours) — no separate vendor. A standard
-  14-period Wilder's-smoothed RSI. This is a momentum-**confirmation**
-  input (higher RSI nudges the score up via `weight_rsi`), not an
-  "overbought, avoid" filter — consistent with the strategy's own framing
-  that a stock isn't automatically too late just because it already ran.
+- `src/technical_indicators.py` — RSI **and VWAP**, both computed
+  **locally** from one shared fetch of Robinhood's own intraday candles
+  (`get_stock_historicals`, 5-minute bars including extended hours) — no
+  separate vendor. RSI is standard 14-period Wilder's-smoothed. VWAP is
+  the reference line a real momentum trader actually watches: price above
+  VWAP signals buyers still in control, and a pullback that holds and
+  reclaims VWAP on volume is the classic high-probability continuation
+  entry — the bull-flag/VWAP-reclaim setup (a strong rally, a pullback/
+  consolidation, then a fresh breakout on renewed volume — exactly the
+  shape of a stock that ran, cooled off, and reignited later the same
+  session or in after-hours). Both are momentum-**confirmation** inputs
+  (`weight_rsi`, `weight_vwap` nudge the score up), not "overbought,
+  avoid" filters — consistent with the strategy's own framing that a
+  stock isn't automatically too late just because it already ran.
 - **Market cap**, computed free from price × `shares_outstanding` (same
   float-provider lookup, no extra call). Mostly already implied by the
   price/float bounds, so it's exposed for logging and an optional hard
@@ -89,9 +96,10 @@ what to trade.
   would just double-count size against float.
 - Every qualifying candidate gets a weighted **composite score**
   (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz` /
-  `weight_float_turnover` / `weight_l2_imbalance` / `weight_rsi` in
-  `config.yaml`) combining day gain, relative volume, recent
-  continuation, chatter, float turnover, book imbalance, and RSI —
+  `weight_float_turnover` / `weight_l2_imbalance` / `weight_rsi` /
+  `weight_vwap` in `config.yaml`) combining day gain, relative volume,
+  recent continuation, chatter, float turnover, book imbalance, RSI, and
+  VWAP position —
   candidates are ranked and entered by this score, not raw gain alone.
 - `src/momentum_tracker.py` — keeps a short rolling history of price/volume
   per symbol across scan cycles. A name only qualifies if it shows real
@@ -102,18 +110,24 @@ what to trade.
   exited once today.
 - `src/database.py` — the runner/failure research database
   (`state/tradeboss.db`, plain sqlite3, open it with any SQL tool or
-  `pandas.read_sql`). Three tables: `candidate_snapshots` logs **every**
-  candidate the scanner ever flags, whether traded or not (an `entered`
-  flag distinguishes them) - the "runner" side; `halt_sightings` logs
-  every time a symbol was seen halted, including a held position that
-  suddenly has no quote - the clearest "failure mode" a resting stop
+  `pandas.read_sql`). Four live tables: `candidate_snapshots` logs
+  **every** candidate the scanner ever flags, whether traded or not (an
+  `entered` flag distinguishes them) - the "runner" side; `halt_sightings`
+  logs every time a symbol was seen halted, including a held position
+  that suddenly has no quote - the clearest "failure mode" a resting stop
   can't handle; `trades` logs every completed trade's full outcome -
   entry/exit price and time, exit reason and a normalized
   `exit_category` (stop_loss/trailing/distribution/take_profit_cap/
   force_exit_time), P&L, and MFE/MAE (how far it ran for you and against
-  you while held) - plus the candidate's score/float/rotations/buzz at
-  entry, so later analysis can ask what actually distinguished winners
-  from losers without rejoining other tables. This is what a replay
+  you while held) - plus the candidate's score/float/rotations/buzz/RSI/
+  VWAP-position at entry, so later analysis can ask what actually
+  distinguished winners from losers without rejoining other tables; and
+  `first_detection_events` (see `src/detection_events.py`) logs the
+  **first** time each symbol crosses a gain/volume threshold on a given
+  day, plus the actual origin timestamp of its first social mention - not
+  a periodic snapshot, the real sequence (first catalyst pickup, first
+  abnormal trade, first +30% cross), recorded for every observed mover
+  even before it qualifies as a full candidate. This is what a replay
   harness or a paper-trading sample review would query against - the
   text log in `logs/` is for watching the bot live, this is for research
   after the fact.
@@ -146,10 +160,25 @@ what to trade.
   the ask; exits are market orders. Exits are **software-monitored**, not
   resting stop orders — a resting stop does nothing on a halted stock, so
   the bot checks price every cycle and fires the sell itself.
-- `src/main.py` — the loop: while the market is open, refresh the kill
-  switch, manage/exit open positions, and (only inside your configured
-  entry window) look for new candidates to enter. Exit priority per
-  position, each cycle:
+- `src/main.py` — the loop, gated by two DIFFERENT windows on purpose:
+  - **Observation window** (`observation_window_start_et`/`_end_et`,
+    default 04:00-20:00 ET) gates the whole loop. Nasdaq's own premarket
+    opens 4:00 AM ET and Robinhood's extended session runs to 8:00 PM -
+    scanning/logging (`scan_and_log_candidates`) runs across this entire
+    envelope so the actual timeline (first catalyst, first abnormal
+    trade, first threshold crossed) gets captured, even hours before an
+    order can be placed. **This needs empirical verification** - whether
+    Robinhood's quote data actually reflects the tape this early hasn't
+    been confirmed against a live run; watch the logs on first use.
+  - **Entry window** (`entry_window_start_et`/`_end_et`, default
+    09:30-15:45 ET) is narrower and gates order placement only -
+    Robinhood's own premarket order execution doesn't open until 7:00 AM
+    ET even with Gold, and extended-hours entries need the market-order-
+    exit fix noted below first.
+
+  Each cycle: refresh the kill switch, manage/exit open positions, always
+  scan+log, and (only inside the entry window) look for new candidates to
+  enter. Exit priority per position, each cycle:
   1. **Stop loss** — hard floor, always wins if breached.
   2. **Take-profit cap** — optional outer ceiling (set high to effectively
      disable and let the trailing exit do the work).
@@ -224,21 +253,37 @@ one-shot script). It logs every decision to stdout and to
 
 ## Open research questions (not implemented - deliberately)
 
-Two claims that keep coming up but aren't backed by data yet, so they're
-NOT hard-coded into the bot. This is exactly what the runner/failure
-database (`state/tradeboss.db`) exists to answer once a real sample
-accumulates - see "runner/failure research database" above.
+Claims that keep coming up but aren't backed by data yet, so they're NOT
+hard-coded into the bot. This is exactly what the runner/failure database
+(`state/tradeboss.db`) exists to answer once a real sample accumulates.
 
-- **"Best time of day is ~5am-9:45am ET."** Unproven, and only partly
-  actionable as stated: **Robinhood's own premarket window starts at
-  7:00 AM ET** (with Gold) for actual order execution - not 5am, no
-  matter what the data shows before then. Data from ~4am is more of a
-  Webull thing (`webull_source.py` already has an optional feed for
-  that). Also note: outside regular hours, Robinhood only accepts limit
-  orders - `executor.py`'s exits currently use market orders
-  (`order_sell_market`), which would simply get rejected in extended
-  hours. Enabling real premarket trading needs that fixed first, not
-  just widening `entry_window_start_et`.
+- **The actual hypothesis: early information/attention + abnormal order
+  flow → detectable runner → remaining executable continuation at
+  Robinhood's first executable time.** Not "stocks up big at 5am keep
+  running" - that throws away the sequence. The real question is how
+  early after the *originating* event (a press release, an SEC filing, a
+  foreign-market development, a paid promotion, social/Discord chatter,
+  or some combination - the SEC explicitly warns microcap promotion
+  propagates through social channels, so attention timing belongs in the
+  dataset, not just price/volume) the eventual winner becomes
+  distinguishable from the hundreds of names that do nothing that day -
+  and critically, how much of the move is left once Robinhood actually
+  lets an order through. `first_detection_events` plus
+  `candidate_snapshots` across the full observation window (prior 4pm
+  close → after-hours catalyst → 4am Nasdaq premarket → 7am Robinhood-
+  executable → 9:30 open → intraday peak/failure) is what makes this
+  answerable instead of asserted. A 5am checkpoint is kept as one
+  measurement point in that timeline, not the hypothesis itself.
+- **Robinhood's own premarket order EXECUTION starts at 7:00 AM ET**
+  (with Gold) - not 5am or 4am, no matter what the data shows before
+  then. The observation window starts earlier (04:00 ET, matching
+  Nasdaq's actual premarket open) specifically to capture that gap
+  between "first visible move" and "first moment we could act." Also
+  note: outside regular hours, Robinhood only accepts limit orders -
+  `executor.py`'s exits currently use market orders (`order_sell_market`),
+  which would simply get rejected in extended hours. Enabling real
+  premarket/after-hours ORDER PLACEMENT (not just observation) needs that
+  fixed first, not just widening `entry_window_start_et`.
 - **"Hold overnight if the data/news proves there's more to the run."**
   This directly reverses the hard same-day/`force_exit_time_et` rule the
   strategy is built around. Not implemented on a hunch - if you want

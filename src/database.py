@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
     spread_pct REAL,
     bid_ask_imbalance REAL,
     rsi REAL,
+    vwap REAL,
+    price_vs_vwap_pct REAL,
     score REAL,
     entered INTEGER
 );
@@ -78,11 +80,37 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_rotations_since_open REAL,
     entry_buzz_messages_recent REAL,
     entry_market_cap REAL,
-    entry_rsi REAL
+    entry_rsi REAL,
+    entry_price_vs_vwap_pct REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_symbol_ts ON candidate_snapshots(symbol, ts);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+
+-- The FIRST moment each signal crossed a threshold for a symbol on a
+-- given day - not a periodic snapshot. A 5am (or any hourly) checkpoint
+-- alone throws away the actual sequence: first catalyst pickup, first
+-- abnormal trade, first volume explosion, first +30% cross. The UNIQUE
+-- constraint + INSERT OR IGNORE (see log_first_detection) gives "first
+-- occurrence wins" for free - a later call for an already-crossed
+-- threshold is just a no-op, so the stored ts is always the true first
+-- crossing at our scan_interval_seconds polling resolution.
+CREATE TABLE IF NOT EXISTS first_detection_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trading_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    price REAL,
+    gain_pct REAL,
+    cum_volume REAL,
+    relative_volume REAL,
+    detail TEXT,
+    UNIQUE(trading_date, symbol, event_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_first_detection_symbol_date
+    ON first_detection_events(symbol, trading_date);
 
 -- Reference tables imported from research/MR_Michael_Historical_Runners_
 -- Failures_Controls.xlsx (see import_historical_workbook below). These are
@@ -172,8 +200,8 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     rotations_since_open, recent_turnover_rate,
                     float_adjusted_relative_volume, buzz_messages_recent,
                     trending, market_cap, spread_pct, bid_ask_imbalance, rsi,
-                    score, entered)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    vwap, price_vs_vwap_pct, score, entered)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     _now_iso(),
                     candidate["symbol"],
@@ -194,6 +222,8 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     candidate.get("spread_pct"),
                     candidate.get("bid_ask_imbalance"),
                     candidate.get("rsi"),
+                    candidate.get("vwap"),
+                    candidate.get("price_vs_vwap_pct"),
                     candidate.get("score"),
                     int(entered),
                 ),
@@ -213,6 +243,36 @@ def log_halt_sighting(symbol: str, last_known_price: float | None, log):
             )
     except Exception as e:
         log.warning("Failed to log halt sighting for %s: %s", symbol, e)
+
+
+def log_first_detection(
+    trading_date: str,
+    symbol: str,
+    event_type: str,
+    ts: str,
+    price: float | None,
+    gain_pct: float | None,
+    cum_volume: float | None,
+    relative_volume: float | None,
+    detail: str | None,
+    log,
+):
+    """Records the first time (trading_date, symbol, event_type) was
+    observed. A repeat call for something already recorded today is a
+    silent no-op (INSERT OR IGNORE against the UNIQUE constraint) - that's
+    the point, not a bug: it's how "first occurrence" is enforced without
+    a separate state file to maintain."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO first_detection_events
+                   (trading_date, symbol, event_type, ts, price, gain_pct,
+                    cum_volume, relative_volume, detail)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (trading_date, symbol, event_type, ts, price, gain_pct, cum_volume, relative_volume, detail),
+            )
+    except Exception as e:
+        log.warning("Failed to log first-detection event %s/%s: %s", symbol, event_type, e)
 
 
 def _exit_category(reason: str) -> str:
@@ -259,8 +319,8 @@ def log_trade(
                     exit_reason, exit_category, pnl, peak_price, trough_price,
                     mfe_pct, mae_pct, dry_run, entry_score, entry_float_shares,
                     entry_rotations_since_open, entry_buzz_messages_recent,
-                    entry_market_cap, entry_rsi)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    entry_market_cap, entry_rsi, entry_price_vs_vwap_pct)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     symbol,
                     entry_ts,
@@ -282,6 +342,7 @@ def log_trade(
                     entry_meta.get("buzz_messages_recent"),
                     entry_meta.get("market_cap"),
                     entry_meta.get("rsi"),
+                    entry_meta.get("price_vs_vwap_pct"),
                 ),
             )
     except Exception as e:

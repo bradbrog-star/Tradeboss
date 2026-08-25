@@ -1,12 +1,13 @@
 import robin_stocks.robinhood as r
 
 from .database import log_halt_sighting
+from .detection_events import record_detections, record_first_social_mention
 from .float_data import get_float_record
 from .float_metrics import compute_effective_float_metrics
 from .level2 import get_order_book
 from .momentum_tracker import MomentumTracker
 from .social_signal import get_buzz
-from .technical_indicators import get_rsi
+from .technical_indicators import get_momentum_indicators
 from .webull_source import get_webull_gainer_symbols
 
 
@@ -39,6 +40,8 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     if last_price is None or not prev_close:
         return None
 
+    gain_pct = (last_price - prev_close) / prev_close
+
     relative_volume = None
     cum_volume = None
     avg_volume = None
@@ -56,10 +59,17 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     # so continuation history is building up before a name even qualifies.
     tracker.record(symbol, last_price, cum_volume)
 
+    # First-detection timestamps: logged for EVERY observed mover, before
+    # any filter below can return None, so a name that hasn't cleared our
+    # price/gain/volume bars yet still gets its first-crossing timestamps
+    # captured. This is what actually answers "how early was this
+    # detectable" - see detection_events.py.
+    if cfg.get("enable_detection_events", True):
+        record_detections(symbol, last_price, gain_pct, cum_volume, relative_volume, log)
+
     if not (cfg["price_min_usd"] <= last_price <= cfg["price_max_usd"]):
         return None
 
-    gain_pct = (last_price - prev_close) / prev_close
     if gain_pct < cfg["min_intraday_gain_pct"]:
         return None
 
@@ -93,9 +103,11 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     # explicitly allows for "seemingly no clear reason at all", so zero
     # buzz doesn't disqualify a candidate, it just scores lower on this
     # one component below.
-    buzz = {"messages_recent": 0, "trending": False}
+    buzz = {"messages_recent": 0, "trending": False, "earliest_message_ts_utc": None}
     if cfg.get("enable_social_signal", True):
         buzz = get_buzz(symbol, log)
+        if cfg.get("enable_detection_events", True):
+            record_first_social_mention(symbol, buzz["earliest_message_ts_utc"], buzz["messages_recent"], log)
 
     # Effective float: how hard the float is actually being traded, not
     # just its raw size. The float figure itself is fetched separately
@@ -154,13 +166,23 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
             )
             return None
 
-    # RSI, computed locally from Robinhood's own intraday candles (no new
-    # vendor). This is a momentum-CONFIRMATION input, not an "overbought,
-    # avoid" filter - consistent with the strategy's own framing that a
-    # stock isn't automatically too late just because it's already run.
+    # RSI + VWAP, both computed locally from Robinhood's own intraday
+    # candles in one shared fetch (no new vendor). Both are momentum-
+    # CONFIRMATION inputs, not filters: RSI isn't an "overbought, avoid"
+    # signal here (a stock isn't automatically too late just because it
+    # ran), and price-above-VWAP is the reference line a real momentum
+    # trader watches for "are buyers still in control" - a pullback that
+    # holds VWAP and reclaims it on volume is the classic high-probability
+    # continuation entry (the bull-flag/VWAP-reclaim setup).
     rsi = None
-    if cfg.get("enable_rsi", True):
-        rsi = get_rsi(symbol, log)
+    vwap = None
+    price_vs_vwap_pct = None
+    if cfg.get("enable_rsi", True) or cfg.get("enable_vwap", True):
+        indicators = get_momentum_indicators(symbol, log)
+        rsi = indicators["rsi"] if cfg.get("enable_rsi", True) else None
+        vwap = indicators["vwap"] if cfg.get("enable_vwap", True) else None
+        if vwap:
+            price_vs_vwap_pct = (last_price - vwap) / vwap
 
     recent_price_change = change["price_change_pct"] if change else None
     score = (
@@ -172,6 +194,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         + (float_metrics["day_turnover"] or 0.0) * cfg.get("weight_float_turnover", 1.0)
         + (order_book["bid_ask_imbalance"] or 0.0 if order_book else 0.0) * cfg.get("weight_l2_imbalance", 0.5)
         + ((rsi / 100) if rsi is not None else 0.0) * cfg.get("weight_rsi", 0.5)
+        + (price_vs_vwap_pct or 0.0) * cfg.get("weight_vwap", 1.0)
     )
 
     return {
@@ -194,6 +217,8 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         "spread_pct": order_book["spread_pct"] if order_book else None,
         "bid_ask_imbalance": order_book["bid_ask_imbalance"] if order_book else None,
         "rsi": rsi,
+        "vwap": vwap,
+        "price_vs_vwap_pct": price_vs_vwap_pct,
         "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }

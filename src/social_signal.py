@@ -13,10 +13,15 @@ def get_buzz(symbol: str, log) -> dict:
     this retail chatter happens, unlike a generic web/Google search, which
     has no clean unauthenticated API and is fragile to scrape).
 
-    Returns {'messages_recent': int, 'trending': bool}. This is a scoring
-    input, not a hard gate - per the strategy, some runners have no visible
-    catalyst at all, so a symbol with zero chatter isn't disqualified, it
-    just scores lower on this one component.
+    Returns {'messages_recent': int, 'trending': bool,
+    'earliest_message_ts_utc': str|None}. This is a scoring input, not a
+    hard gate - per the strategy, some runners have no visible catalyst at
+    all, so a symbol with zero chatter isn't disqualified, it just scores
+    lower on this one component. `earliest_message_ts_utc` is the actual
+    origin timestamp of the earliest visible message (StockTwits'
+    `created_at`, UTC - not ET like the rest of this codebase) - this is
+    what lets detection_events.py record when the attention event actually
+    started, not just when we happened to notice it.
 
     Cached briefly per symbol to stay well under StockTwits' public rate
     limit (~200 unauthenticated requests/hour/IP)."""
@@ -24,14 +29,18 @@ def get_buzz(symbol: str, log) -> dict:
     if cached and time.time() - cached["ts"] < _CACHE_TTL_SECONDS:
         return cached["data"]
 
-    data = {"messages_recent": 0, "trending": False}
+    data = {"messages_recent": 0, "trending": False, "earliest_message_ts_utc": None}
     try:
         resp = requests.get(
             f"https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json",
             timeout=5,
         )
         if resp.status_code == 200:
-            data["messages_recent"] = len(resp.json().get("messages", []))
+            messages = resp.json().get("messages", [])
+            data["messages_recent"] = len(messages)
+            timestamps = [m["created_at"] for m in messages if m.get("created_at")]
+            if timestamps:
+                data["earliest_message_ts_utc"] = min(timestamps)
         elif resp.status_code == 429:
             log.warning("StockTwits rate limited; skipping buzz check for %s this cycle", symbol)
     except Exception as e:

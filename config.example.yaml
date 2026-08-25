@@ -93,6 +93,20 @@ min_recent_volume_shares: 5000       # >= this many shares traded in that window
 entry_window_start_et: "09:30"
 entry_window_end_et: "15:45"
 
+# --- Observation window (research/timeline data) ---------------------------
+# Wider than the entry window on purpose - gates the whole scan loop, not
+# just entries. The bot logs/detects across this full envelope (matching
+# what Robinhood itself receives data for: Nasdaq premarket opens 4:00 AM
+# ET, Robinhood's own extended session runs to 8:00 PM) so the actual
+# sequence - first catalyst, first abnormal trade, first threshold crossed
+# - gets captured even before entry_window_start_et lets an order through.
+# NEEDS EMPIRICAL VERIFICATION: whether Robinhood's quote data actually
+# reflects the tape this early hasn't been confirmed against a live run -
+# watch the logs on first use. If quotes come back empty before ~7 AM,
+# either narrow this or add Webull as a secondary observation source.
+observation_window_start_et: "04:00"
+observation_window_end_et: "20:00"
+
 # --- Additional sources / "the whole picture" -----------------------------
 # Robinhood's top-movers list alone is a small curated set. These widen the
 # universe and add a real chatter signal, closer to how a human scans
@@ -183,3 +197,22 @@ weight_l2_imbalance: 0.5
 # strategy's own framing that a stock isn't automatically too late.
 enable_rsi: true
 weight_rsi: 0.5
+
+# --- VWAP (src/technical_indicators.py) --------------------------------
+# Also computed locally from the same intraday candles as RSI (one shared
+# fetch). The reference line a real momentum trader watches: price above
+# VWAP signals buyers in control; a pullback that holds and reclaims VWAP
+# on volume is the classic high-probability continuation entry (the
+# bull-flag/VWAP-reclaim setup - see DAIC-style rally/pullback/reignite
+# charts). price_vs_vwap_pct feeds the score via weight_vwap.
+enable_vwap: true
+weight_vwap: 1.0
+
+# --- First-detection events (src/detection_events.py) -----------------
+# Logs the FIRST time each symbol crosses a gain/volume threshold each
+# day (and the first social mention's actual origin timestamp), not just
+# periodic snapshots - see the historical_events discussion in README for
+# why. Runs for every observed mover, even ones that don't pass the
+# scanner's other filters, so early-but-not-yet-qualifying moves are still
+# captured in first_detection_events.
+enable_detection_events: true

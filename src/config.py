@@ -57,6 +57,11 @@ def load_config() -> dict:
         "weight_l2_imbalance",
         "enable_rsi",
         "weight_rsi",
+        "enable_vwap",
+        "weight_vwap",
+        "enable_detection_events",
+        "observation_window_start_et",
+        "observation_window_end_et",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:

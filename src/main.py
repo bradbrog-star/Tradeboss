@@ -25,10 +25,19 @@ def _now_et() -> datetime:
     return datetime.now(ET)
 
 
-def _is_market_open(now: datetime) -> bool:
+def _is_observation_open(cfg: dict, now: datetime) -> bool:
+    """Gates the whole loop - wider than the entry window on purpose.
+    Logging/detection should run across the full premarket-through-after-
+    hours envelope (default 04:00-20:00 ET, matching what Robinhood itself
+    receives data for) so the actual sequence - first catalyst, first
+    abnormal trade, first threshold crossed - gets captured even though
+    Robinhood doesn't let an ORDER through until entry_window_start_et
+    (7:00 AM ET at the earliest, and only with Gold - see README)."""
     if now.weekday() >= 5:
         return False
-    return dtime(9, 30) <= now.time() <= dtime(16, 0)
+    start = _parse_et_time(cfg.get("observation_window_start_et", "04:00"))
+    end = _parse_et_time(cfg.get("observation_window_end_et", "20:00"))
+    return start <= now.time() <= end
 
 
 def _in_entry_window(cfg: dict, now: datetime) -> bool:
@@ -148,18 +157,24 @@ def manage_open_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, snap
                 )
 
 
-def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tracker: MomentumTracker):
+def scan_and_log_candidates(cfg: dict, log, tracker: MomentumTracker) -> list[dict]:
+    """Runs the scanner and logs every sighting for research (the "runner"
+    side of the runner/failure database, plus first-detection events
+    inside evaluate_symbol) - independent of whether anything ends up
+    traded. Called across the whole observation window, not just the
+    entry window, so premarket/after-hours moves get captured even when
+    we can't act on them yet."""
+    candidates = get_runner_candidates(cfg, log, tracker)
+    for candidate in candidates:
+        log_candidate_snapshot(candidate, entered=False, log=log)
+    return candidates
+
+
+def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, candidates: list[dict]):
     if not risk.can_open_new_position():
         return
 
-    candidates = get_runner_candidates(cfg, log, tracker)
-    # Log every sighting for research (the "runner" side of the runner/
-    # failure database), independent of whether the bot ends up trading
-    # it - risk limits below may block otherwise-qualified candidates.
-    for candidate in candidates:
-        log_candidate_snapshot(candidate, entered=False, log=log)
-
-    candidates.sort(key=lambda c: c["score"], reverse=True)
+    candidates = sorted(candidates, key=lambda c: c["score"], reverse=True)
 
     for candidate in candidates:
         if not risk.can_open_new_position():
@@ -180,7 +195,7 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         )
         log.info(
             "Candidate %s: score %.2f, last $%.2f (+%.1f%% today), rel volume %s, "
-            "float %s, mkt cap %s, rotations %s, RSI %s, buzz %d msgs%s",
+            "float %s, mkt cap %s, rotations %s, RSI %s, vs VWAP %s, buzz %d msgs%s",
             symbol,
             candidate["score"],
             candidate["last_price"],
@@ -190,6 +205,7 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
             f"${candidate['market_cap']:,.0f}" if candidate["market_cap"] else "unknown",
             f"{candidate['rotations_since_open']:.2f}x" if candidate["rotations_since_open"] else "n/a",
             f"{candidate['rsi']:.0f}" if candidate["rsi"] is not None else "n/a",
+            f"{candidate['price_vs_vwap_pct']:+.1%}" if candidate["price_vs_vwap_pct"] is not None else "n/a",
             candidate["buzz_messages_recent"],
             " (trending)" if candidate["trending"] else "",
         )
@@ -202,6 +218,7 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
                 "buzz_messages_recent": candidate["buzz_messages_recent"],
                 "market_cap": candidate["market_cap"],
                 "rsi": candidate["rsi"],
+                "price_vs_vwap_pct": candidate["price_vs_vwap_pct"],
             }
             risk.record_open(result["symbol"], result["qty"], result["price"], entry_meta)
             log_candidate_snapshot(candidate, entered=True, log=log)
@@ -215,9 +232,15 @@ def run_once(risk: RiskManager, cfg: dict, dry_run: bool, log, tracker: Momentum
 
     manage_open_positions(risk, cfg, dry_run, log, snapshot)
 
+    # Scanning/logging runs across the whole observation window (this
+    # function is only called when _is_observation_open is true - see
+    # main()); actual order placement stays gated to the narrower,
+    # Gold-dependent entry window.
+    candidates = scan_and_log_candidates(cfg, log, tracker)
+
     now = _now_et()
     if _in_entry_window(cfg, now) and not _past_force_exit(cfg, now):
-        try_open_new_positions(risk, cfg, dry_run, log, tracker)
+        try_open_new_positions(risk, cfg, dry_run, log, candidates)
 
 
 def main():
@@ -237,8 +260,8 @@ def main():
 
     while True:
         now = _now_et()
-        if not _is_market_open(now):
-            log.info("Market closed (%s ET). Sleeping.", now.strftime("%H:%M"))
+        if not _is_observation_open(cfg, now):
+            log.info("Outside observation window (%s ET). Sleeping.", now.strftime("%H:%M"))
             time.sleep(60)
             continue
 
