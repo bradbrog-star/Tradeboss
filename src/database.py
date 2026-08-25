@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
     float_adjusted_relative_volume REAL,
     buzz_messages_recent INTEGER,
     trending INTEGER,
+    spread_pct REAL,
+    bid_ask_imbalance REAL,
     score REAL,
     entered INTEGER
 );
@@ -98,8 +100,8 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     float_shares, float_source, float_stale, float_stale_reasons,
                     rotations_since_open, recent_turnover_rate,
                     float_adjusted_relative_volume, buzz_messages_recent,
-                    trending, score, entered)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    trending, spread_pct, bid_ask_imbalance, score, entered)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     _now_iso(),
                     candidate["symbol"],
@@ -116,6 +118,8 @@ def log_candidate_snapshot(candidate: dict, entered: bool, log):
                     candidate.get("float_adjusted_relative_volume"),
                     candidate.get("buzz_messages_recent"),
                     int(bool(candidate.get("trending"))),
+                    candidate.get("spread_pct"),
+                    candidate.get("bid_ask_imbalance"),
                     candidate.get("score"),
                     int(entered),
                 ),

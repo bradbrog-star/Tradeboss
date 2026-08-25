@@ -52,6 +52,9 @@ def load_config() -> dict:
         "float_disagreement_pct_threshold",
         "require_valid_float",
         "weight_float_turnover",
+        "enable_level2",
+        "max_spread_pct",
+        "weight_l2_imbalance",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:

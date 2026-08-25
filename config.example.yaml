@@ -151,3 +151,21 @@ require_valid_float: false
 # pass every other check either way.
 # min_float_shares: 1000000
 # max_float_shares: 20000000
+
+# --- Level II (src/level2.py) ----------------------------------------------
+# Robinhood Gold's Nasdaq order book (get_pricebook_by_symbol) - needs an
+# active Gold subscription ($5/mo) on the logged-in account. Nasdaq-listed
+# symbols only; NYSE/OTC candidates just won't have this data, which is
+# fine, not an error. This is a depth/spread snapshot, not a streaming
+# tape - see README for what a real market-data vendor would add on top.
+enable_level2: true
+
+# Hard gate: skip a candidate if its top-of-book spread is wider than
+# this fraction of the ask. Entries are limit orders just above the ask
+# (executor.py) - a wide spread is a real execution-quality problem, not
+# just a scoring nitpick.
+max_spread_pct: 0.15
+
+# Weight applied to bid/ask size imbalance in the composite score
+# (positive = more size stacked on the bid than the ask).
+weight_l2_imbalance: 0.5

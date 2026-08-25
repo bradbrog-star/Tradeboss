@@ -66,11 +66,21 @@ what to trade.
   is also computed but documented as an approximation (it collapses to
   the same ratio as `day_turnover` without a true VWAP-weighted dollar
   volume feed, which isn't wired in here).
+- `src/level2.py` — Robinhood Gold's Nasdaq Level II order book
+  (`get_pricebook_by_symbol`, needs an active Gold subscription, $5/mo,
+  reuses the same login). **Nasdaq-listed symbols only** — NYSE and
+  OTC/pink-sheet tickers just won't have this, which is expected, and
+  it's a polled snapshot each cycle, not a streaming tape (see "What this
+  isn't" below for what a real tape provider adds). Used two ways: a hard
+  gate (`max_spread_pct`) that skips a candidate if its top-of-book
+  spread is too wide for the limit-order entry to make sense, and a
+  scoring input (`weight_l2_imbalance`) from bid/ask size imbalance.
 - Every qualifying candidate gets a weighted **composite score**
   (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz` /
-  `weight_float_turnover` in `config.yaml`) combining day gain, relative
-  volume, recent continuation, chatter, and float turnover — candidates
-  are ranked and entered by this score, not raw gain alone.
+  `weight_float_turnover` / `weight_l2_imbalance` in `config.yaml`)
+  combining day gain, relative volume, recent continuation, chatter,
+  float turnover, and book imbalance — candidates are ranked and entered
+  by this score, not raw gain alone.
 - `src/momentum_tracker.py` — keeps a short rolling history of price/volume
   per symbol across scan cycles. A name only qualifies if it shows real
   movement in the last few cycles (`momentum_lookback_cycles`), not just a
@@ -139,6 +149,11 @@ at alphavantage.co) for float data — see "Effective float" above. The bot
 runs without one, it just can't compute float metrics or filter on float
 size.
 
+Level II (`src/level2.py`) needs an active Robinhood Gold subscription
+($5/mo) on the account you log in with — no separate API key, it uses the
+same Robinhood login. Without Gold, `get_pricebook_by_symbol` just returns
+nothing and the bot proceeds without the spread gate/imbalance score.
+
 ### MFA
 
 If your Robinhood account uses an authenticator app, set
@@ -196,3 +211,12 @@ one-shot script). It logs every decision to stdout and to
 - **Nothing here assesses whether a specific move is a pump-and-dump you
   don't want exposure to** — the filters are purely price/volume. That
   judgment call is on you per trade.
+- **No real tape.** `src/level2.py` gives a polled Nasdaq-only order-book
+  snapshot each scan cycle, not continuous trade-by-trade time-and-sales.
+  A real replay/slippage-measurement pass (phase 4 of the research
+  roadmap) needs an actual streaming feed with historical tick data and
+  broader (non-Nasdaq) coverage — evaluated options: Alpaca's Algo Trader
+  Plus ($99/mo flat, full SIP trades/quotes + LULD halt messages) or
+  Databento (pay-as-you-go, true L2 order-book depth, more integration
+  work). Neither is wired in; this is a deliberate cost decision left to
+  you, not an oversight.

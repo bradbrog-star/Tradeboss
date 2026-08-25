@@ -3,6 +3,7 @@ import robin_stocks.robinhood as r
 from .database import log_halt_sighting
 from .float_data import get_float_record
 from .float_metrics import compute_effective_float_metrics
+from .level2 import get_order_book
 from .momentum_tracker import MomentumTracker
 from .social_signal import get_buzz
 from .webull_source import get_webull_gainer_symbols
@@ -127,6 +128,20 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     elif cfg.get("min_float_shares") or cfg.get("max_float_shares"):
         log.info("%s: float unknown, can't apply float size filter - not disqualifying", symbol)
 
+    # Level II (Nasdaq-listed only, needs Robinhood Gold - see level2.py).
+    # A hard spread gate here is a real execution-quality check: entries
+    # are limit orders just above the ask (executor.py), so a stock with
+    # an absurd spread is a bad idea regardless of how good the momentum
+    # signal looks.
+    order_book = None
+    if cfg.get("enable_level2", True):
+        order_book = get_order_book(symbol, log)
+        if order_book and order_book["spread_pct"] > cfg.get("max_spread_pct", 0.15):
+            log.info(
+                "%s: spread %.1f%% wider than max_spread_pct, skipping", symbol, order_book["spread_pct"] * 100
+            )
+            return None
+
     recent_price_change = change["price_change_pct"] if change else None
     score = (
         gain_pct * cfg.get("weight_gain", 1.0)
@@ -135,6 +150,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         + min(buzz["messages_recent"] / 20, 1.0) * cfg.get("weight_buzz", 0.5)
         + (cfg.get("weight_buzz", 0.5) if buzz["trending"] else 0.0)
         + (float_metrics["day_turnover"] or 0.0) * cfg.get("weight_float_turnover", 1.0)
+        + (order_book["bid_ask_imbalance"] or 0.0 if order_book else 0.0) * cfg.get("weight_l2_imbalance", 0.5)
     )
 
     return {
@@ -153,6 +169,8 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         "rotations_since_open": float_metrics["rotations_since_open"],
         "recent_turnover_rate": float_metrics["recent_turnover_rate"],
         "float_adjusted_relative_volume": float_metrics["float_adjusted_relative_volume"],
+        "spread_pct": order_book["spread_pct"] if order_book else None,
+        "bid_ask_imbalance": order_book["bid_ask_imbalance"] if order_book else None,
         "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }
