@@ -120,3 +120,34 @@ weight_gain: 1.0
 weight_relvol: 0.05
 weight_continuation: 2.0
 weight_buzz: 0.5
+weight_float_turnover: 1.0   # weight applied to rotations_since_open (day_turnover) in the score
+
+# --- Effective float (src/float_data.py, src/float_metrics.py) ------------
+# "Low effective float" is core to this strategy but Robinhood/Webull don't
+# reliably expose it - this pulls it from a real financial-data API instead.
+# Requires an API key in .env: FMP_API_KEY (recommended primary) or
+# ALPHA_VANTAGE_API_KEY. Get a free key at financialmodelingprep.com
+# (250 req/day free tier - plenty, since float is cached, not re-fetched
+# every scan cycle) or alphavantage.co (25 req/day free tier).
+float_provider: "fmp"          # "fmp" or "alpha_vantage"
+float_cache_ttl_hours: 48      # float rarely changes; don't re-fetch every cycle
+float_staleness_days_threshold: 45   # flag if the provider's own as-of date is older than this
+
+# Optional: also fetch from the OTHER provider once per cache refresh and
+# flag when the two disagree by more than this fraction. Needs both API
+# keys set. Off by default to save API calls.
+float_cross_check: false
+float_disagreement_pct_threshold: 0.25
+
+# If true, a candidate whose float can't be verified (missing, stale, or
+# sources disagree) is skipped entirely rather than just scored without a
+# turnover boost. Off by default - many legitimate penny-stock issuers
+# have thin/delayed float reporting; this only matters if you want to be
+# strict about it.
+require_valid_float: false
+
+# Optional hard float-size filter, in shares. Leave unset (or remove) to
+# not filter on float size at all - candidates with unknown float still
+# pass every other check either way.
+# min_float_shares: 1000000
+# max_float_shares: 20000000

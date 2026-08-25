@@ -42,11 +42,35 @@ what to trade.
   `webull` package. Off by default; it's a reverse-engineered API that
   drifts between versions, so verify it against current docs before
   relying on it (see the file for details).
+- `src/float_data.py` / `src/float_metrics.py` — real float data. Neither
+  Robinhood nor Webull reliably expose float, so this hits a real
+  financial-data API instead (Financial Modeling Prep's dedicated
+  `shares_float` endpoint by default, sourced from SEC filings — free
+  tier 250 req/day; Alpha Vantage's `OVERVIEW.SharesFloat` as an
+  alternative or cross-check). Requires `FMP_API_KEY` and/or
+  `ALPHA_VANTAGE_API_KEY` in `.env`. Because float rarely changes, it's
+  **cached per symbol** (`float_cache_ttl_hours`) instead of re-fetched
+  every scan cycle — this is what makes even the free tiers workable.
+  Every float record carries an honest `stale`/`stale_reasons` verdict
+  (missing figure, no as-of date, figure older than
+  `float_staleness_days_threshold`, or the two providers disagreeing if
+  `float_cross_check` is on) — a stale or unverifiable float is never
+  silently treated as exact, and by default doesn't disqualify a
+  candidate, it just doesn't get the turnover score boost (set
+  `require_valid_float: true` to make it a hard gate instead).
+  On top of the raw figure, `float_metrics.py` computes the actual
+  effective-float signals: `day_turnover` / `rotations_since_open`
+  (cumulative volume ÷ float), `recent_turnover_rate` (volume ÷ float
+  over just the last few cycles — the *current* pace, not the whole
+  day), and `float_adjusted_relative_volume`. `dollar_volume_over_float_value`
+  is also computed but documented as an approximation (it collapses to
+  the same ratio as `day_turnover` without a true VWAP-weighted dollar
+  volume feed, which isn't wired in here).
 - Every qualifying candidate gets a weighted **composite score**
-  (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz`
-  in `config.yaml`) combining day gain, relative volume, recent
-  continuation, and chatter — candidates are ranked and entered by this
-  score, not raw gain alone.
+  (`weight_gain` / `weight_relvol` / `weight_continuation` / `weight_buzz` /
+  `weight_float_turnover` in `config.yaml`) combining day gain, relative
+  volume, recent continuation, chatter, and float turnover — candidates
+  are ranked and entered by this score, not raw gain alone.
 - `src/momentum_tracker.py` — keeps a short rolling history of price/volume
   per symbol across scan cycles. A name only qualifies if it shows real
   movement in the last few cycles (`momentum_lookback_cycles`), not just a
@@ -86,12 +110,17 @@ what to trade.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env        # fill in your Robinhood credentials
+cp .env.example .env        # fill in your Robinhood credentials + float API key
 cp config.example.yaml config.yaml   # review EVERY value, see below
 ```
 
 `config.yaml` and `.env` are gitignored — they hold your credentials and
 personal risk settings and should never be committed.
+
+Get a free `FMP_API_KEY` at financialmodelingprep.com (or `ALPHA_VANTAGE_API_KEY`
+at alphavantage.co) for float data — see "Effective float" above. The bot
+runs without one, it just can't compute float metrics or filter on float
+size.
 
 ### MFA
 

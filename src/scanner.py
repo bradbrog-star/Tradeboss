@@ -1,5 +1,7 @@
 import robin_stocks.robinhood as r
 
+from .float_data import get_float_record
+from .float_metrics import compute_effective_float_metrics
 from .momentum_tracker import MomentumTracker
 from .social_signal import get_buzz
 from .webull_source import get_webull_gainer_symbols
@@ -35,6 +37,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
 
     relative_volume = None
     cum_volume = None
+    avg_volume = None
     try:
         fundamentals_list = r.stocks.get_fundamentals(symbol)
         fundamentals = fundamentals_list[0] if fundamentals_list else {}
@@ -90,6 +93,38 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
     if cfg.get("enable_social_signal", True):
         buzz = get_buzz(symbol, log)
 
+    # Effective float: how hard the float is actually being traded, not
+    # just its raw size. The float figure itself is fetched separately
+    # (float_data.py) and comes with an honest staleness verdict - a
+    # missing/stale float never silently becomes "0" or "fine" here.
+    float_record = get_float_record(symbol, cfg, log)
+    float_metrics = compute_effective_float_metrics(
+        float_shares=float_record["float_shares"],
+        day_cum_volume=cum_volume,
+        recent_window_volume=change["volume_change"] if change else None,
+        avg_volume=avg_volume,
+        price=last_price,
+    )
+
+    if cfg.get("require_valid_float") and float_record["stale"]:
+        log.info(
+            "%s: float unverified/stale (%s), skipping (require_valid_float is on)",
+            symbol,
+            "; ".join(float_record["stale_reasons"]),
+        )
+        return None
+
+    float_shares = float_record["float_shares"]
+    if float_shares is not None:
+        min_float = cfg.get("min_float_shares")
+        max_float = cfg.get("max_float_shares")
+        if min_float and float_shares < min_float:
+            return None
+        if max_float and float_shares > max_float:
+            return None
+    elif cfg.get("min_float_shares") or cfg.get("max_float_shares"):
+        log.info("%s: float unknown, can't apply float size filter - not disqualifying", symbol)
+
     recent_price_change = change["price_change_pct"] if change else None
     score = (
         gain_pct * cfg.get("weight_gain", 1.0)
@@ -97,6 +132,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         + (recent_price_change or 0.0) * cfg.get("weight_continuation", 2.0)
         + min(buzz["messages_recent"] / 20, 1.0) * cfg.get("weight_buzz", 0.5)
         + (cfg.get("weight_buzz", 0.5) if buzz["trending"] else 0.0)
+        + (float_metrics["day_turnover"] or 0.0) * cfg.get("weight_float_turnover", 1.0)
     )
 
     return {
@@ -107,6 +143,14 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
         "relative_volume": relative_volume,
         "buzz_messages_recent": buzz["messages_recent"],
         "trending": buzz["trending"],
+        "float_shares": float_shares,
+        "float_source": float_record["source"],
+        "float_as_of_date": float_record["as_of_date"],
+        "float_stale": float_record["stale"],
+        "float_stale_reasons": float_record["stale_reasons"],
+        "rotations_since_open": float_metrics["rotations_since_open"],
+        "recent_turnover_rate": float_metrics["recent_turnover_rate"],
+        "float_adjusted_relative_volume": float_metrics["float_adjusted_relative_volume"],
         "score": score,
         "ask_price": _to_float(quote.get("ask_price")) or last_price,
     }

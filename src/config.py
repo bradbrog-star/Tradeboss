@@ -45,6 +45,13 @@ def load_config() -> dict:
         "weight_relvol",
         "weight_continuation",
         "weight_buzz",
+        "float_provider",
+        "float_cache_ttl_hours",
+        "float_staleness_days_threshold",
+        "float_cross_check",
+        "float_disagreement_pct_threshold",
+        "require_valid_float",
+        "weight_float_turnover",
     ]
     missing = [k for k in required if k not in cfg]
     if missing:

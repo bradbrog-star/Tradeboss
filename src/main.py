@@ -148,13 +148,22 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         if dollar_amount < candidate["ask_price"]:
             continue
 
+        float_str = (
+            f"{candidate['float_shares']:,.0f} sh ({candidate['float_source']}"
+            f"{', STALE: ' + '; '.join(candidate['float_stale_reasons']) if candidate['float_stale'] else ''})"
+            if candidate["float_shares"]
+            else "unknown"
+        )
         log.info(
-            "Candidate %s: score %.2f, last $%.2f (+%.1f%% today), rel volume %s, buzz %d msgs%s",
+            "Candidate %s: score %.2f, last $%.2f (+%.1f%% today), rel volume %s, "
+            "float %s, rotations %s, buzz %d msgs%s",
             symbol,
             candidate["score"],
             candidate["last_price"],
             candidate["gain_pct"] * 100,
             f"{candidate['relative_volume']:.1f}x" if candidate["relative_volume"] else "n/a",
+            float_str,
+            f"{candidate['rotations_since_open']:.2f}x" if candidate["rotations_since_open"] else "n/a",
             candidate["buzz_messages_recent"],
             " (trending)" if candidate["trending"] else "",
         )
