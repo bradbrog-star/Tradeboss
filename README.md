@@ -117,6 +117,23 @@ what to trade.
   harness or a paper-trading sample review would query against - the
   text log in `logs/` is for watching the bot live, this is for research
   after the fact.
+
+  The database also holds four **reference** tables imported from
+  `research/MR_Michael_Historical_Runners_Failures_Controls.xlsx` (a
+  hand-researched, cited event study - see the workbook's own README
+  sheet): `historical_events` (real runner/failed-runner/regulatory-
+  failure cases, each cited to an actual SEC/Nasdaq filing),
+  `historical_matched_controls` (provisional control pairings for
+  comparison), `historical_match_rules` (the matching spec - calipers,
+  weights, and a leakage rule per variable), and `historical_sources`
+  (the citation registry). These are read-only reference data, never
+  written to by the live bot - re-import after editing the workbook with
+  `python scripts/import_historical_seed.py` (idempotent, requires
+  `openpyxl`). The workbook's own discipline matters here: its
+  `Feature_Snapshots`/`Outcomes` sheets are schemas only (no point-in-time
+  data ingested yet), and its `Match_Rules` sheet explicitly forbids
+  matching on outcome variables - any future code that joins against
+  these tables must respect that same no-lookahead rule.
 - `src/risk_manager.py` — the guardrails: max position size, max total
   capital deployed, max concurrent positions, max trades/day, and a daily
   loss **kill switch** (halts new entries once today's realized + open P&L

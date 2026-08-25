@@ -15,6 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+DEFAULT_HISTORICAL_WORKBOOK = (
+    Path(__file__).resolve().parent.parent
+    / "research"
+    / "MR_Michael_Historical_Runners_Failures_Controls.xlsx"
+)
+
 DB_PATH = Path(__file__).resolve().parent.parent / "state" / "tradeboss.db"
 ET = ZoneInfo("America/New_York")
 
@@ -77,6 +83,67 @@ CREATE TABLE IF NOT EXISTS trades (
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_symbol_ts ON candidate_snapshots(symbol, ts);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+
+-- Reference tables imported from research/MR_Michael_Historical_Runners_
+-- Failures_Controls.xlsx (see import_historical_workbook below). These are
+-- hand-researched, cited historical cases - not written to by the live
+-- bot - kept here so they're queryable/joinable alongside the bot's own
+-- candidate_snapshots/trades once real point-in-time features accumulate.
+-- The workbook's own no-lookahead discipline applies to any future code
+-- that joins against these: never match on outcome fields, and note that
+-- Feature_Snapshots/Outcomes in the source workbook are schemas only -
+-- no point-in-time data has actually been ingested yet.
+CREATE TABLE IF NOT EXISTS historical_events (
+    event_id TEXT PRIMARY KEY,
+    ticker TEXT,
+    issuer TEXT,
+    event_date TEXT,
+    event_window TEXT,
+    exchange TEXT,
+    label TEXT,
+    taxonomy TEXT,
+    catalyst_type TEXT,
+    catalyst_quality TEXT,
+    headline_move_pct REAL,
+    volume_shares REAL,
+    reference_price REAL,
+    reverse_split_state TEXT,
+    foreign_issuer TEXT,
+    regulatory_outcome TEXT,
+    failure_mode TEXT,
+    status TEXT,
+    source_1 TEXT,
+    source_2 TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS historical_matched_controls (
+    match_id TEXT PRIMARY KEY,
+    treated_event_id TEXT,
+    control_event_id TEXT,
+    match_class TEXT,
+    match_status TEXT,
+    rationale TEXT,
+    hard_match_dimensions TEXT,
+    missing_for_statistical_match TEXT,
+    match_score REAL
+);
+
+CREATE TABLE IF NOT EXISTS historical_match_rules (
+    variable TEXT,
+    transform_bucket TEXT,
+    hard_caliper TEXT,
+    default_weight TEXT,
+    leakage_rule TEXT
+);
+
+CREATE TABLE IF NOT EXISTS historical_sources (
+    source_id TEXT PRIMARY KEY,
+    domain TEXT,
+    source_type TEXT,
+    url_or_reference TEXT,
+    purpose TEXT
+);
 """
 
 
@@ -219,3 +286,106 @@ def log_trade(
             )
     except Exception as e:
         log.warning("Failed to log trade for %s: %s", symbol, e)
+
+
+def _sheet_rows(ws) -> list[dict]:
+    """Every research sheet in the workbook follows the same layout: title
+    row, description row, blank row, header row, then data - so header is
+    always row 4. Returns one dict per non-empty data row, keyed by
+    header, skipping rows that are entirely blank (template rows with no
+    data yet, e.g. Feature_Snapshots/Outcomes in the source workbook)."""
+    header = [c.value for c in ws[4]]
+    rows = []
+    for row in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
+        if all(v is None for v in row):
+            continue
+        rows.append(dict(zip(header, row)))
+    return rows
+
+
+def import_historical_workbook(path: Path = DEFAULT_HISTORICAL_WORKBOOK, log=None) -> dict:
+    """Imports Event_Master, Matched_Controls, Match_Rules, and Sources
+    from the research workbook into historical_* reference tables.
+    Idempotent - re-running after the workbook is edited replaces prior
+    rows rather than duplicating them. Returns a dict of table -> row
+    count imported. Requires openpyxl (only needed for this one-time/
+    occasional import, not for running the bot itself)."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, data_only=True)
+    counts = {}
+
+    with _connect() as conn:
+        events = _sheet_rows(wb["Event_Master"])
+        conn.execute("DELETE FROM historical_events")
+        for r in events:
+            conn.execute(
+                """INSERT INTO historical_events
+                   (event_id, ticker, issuer, event_date, event_window, exchange,
+                    label, taxonomy, catalyst_type, catalyst_quality,
+                    headline_move_pct, volume_shares, reference_price,
+                    reverse_split_state, foreign_issuer, regulatory_outcome,
+                    failure_mode, status, source_1, source_2, notes)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    r.get("event_id"), r.get("ticker"), r.get("issuer"),
+                    str(r.get("event_date")) if r.get("event_date") is not None else None,
+                    r.get("event_window"), r.get("exchange"), r.get("label"),
+                    r.get("taxonomy"), r.get("catalyst_type"), r.get("catalyst_quality"),
+                    r.get("headline_move_pct"), r.get("volume_shares"), r.get("reference_price"),
+                    r.get("reverse_split_state"), r.get("foreign_issuer"),
+                    r.get("regulatory_outcome"), r.get("failure_mode"), r.get("status"),
+                    r.get("source_1"), r.get("source_2"), r.get("notes"),
+                ),
+            )
+        counts["historical_events"] = len(events)
+
+        controls = _sheet_rows(wb["Matched_Controls"])
+        conn.execute("DELETE FROM historical_matched_controls")
+        for r in controls:
+            conn.execute(
+                """INSERT INTO historical_matched_controls
+                   (match_id, treated_event_id, control_event_id, match_class,
+                    match_status, rationale, hard_match_dimensions,
+                    missing_for_statistical_match, match_score)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    r.get("match_id"), r.get("treated_event_id"), r.get("control_event_id"),
+                    r.get("match_class"), r.get("match_status"), r.get("rationale"),
+                    r.get("hard_match_dimensions"), r.get("missing_for_statistical_match"),
+                    r.get("match_score"),
+                ),
+            )
+        counts["historical_matched_controls"] = len(controls)
+
+        rules = _sheet_rows(wb["Match_Rules"])
+        conn.execute("DELETE FROM historical_match_rules")
+        for r in rules:
+            conn.execute(
+                """INSERT INTO historical_match_rules
+                   (variable, transform_bucket, hard_caliper, default_weight, leakage_rule)
+                   VALUES (?,?,?,?,?)""",
+                (
+                    r.get("Variable"), r.get("Transform / bucket"), r.get("Hard caliper"),
+                    str(r.get("Default weight")), r.get("Leakage rule"),
+                ),
+            )
+        counts["historical_match_rules"] = len(rules)
+
+        sources = _sheet_rows(wb["Sources"])
+        conn.execute("DELETE FROM historical_sources")
+        for r in sources:
+            conn.execute(
+                """INSERT INTO historical_sources
+                   (source_id, domain, source_type, url_or_reference, purpose)
+                   VALUES (?,?,?,?,?)""",
+                (
+                    r.get("source_id"), r.get("domain"), r.get("source_type"),
+                    r.get("url_or_reference"), r.get("purpose"),
+                ),
+            )
+        counts["historical_sources"] = len(sources)
+
+    if log:
+        log.info("Imported historical workbook: %s", counts)
+    return counts
