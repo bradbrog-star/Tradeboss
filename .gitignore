@@ -8,4 +8,5 @@ config.yaml
 
 logs/*.log
 state/*.json
+state/*.db
 !state/.gitkeep

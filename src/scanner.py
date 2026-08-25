@@ -1,5 +1,6 @@
 import robin_stocks.robinhood as r
 
+from .database import log_halt_sighting
 from .float_data import get_float_record
 from .float_metrics import compute_effective_float_metrics
 from .momentum_tracker import MomentumTracker
@@ -28,6 +29,7 @@ def evaluate_symbol(symbol: str, cfg: dict, log, tracker: MomentumTracker) -> di
 
     if _is_halted(quote):
         log.info("%s is halted, skipping", symbol)
+        log_halt_sighting(symbol, _to_float(quote.get("last_trade_price")), log)
         return None
 
     last_price = _to_float(quote.get("last_trade_price"))

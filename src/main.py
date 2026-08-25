@@ -7,6 +7,7 @@ import robin_stocks.robinhood as r
 
 from . import auth, executor
 from .config import load_config
+from .database import log_candidate_snapshot, log_halt_sighting, log_trade
 from .logger import get_logger
 from .momentum_tracker import MomentumTracker
 from .risk_manager import RiskManager
@@ -103,6 +104,8 @@ def manage_open_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, snap
         data = snapshot.get(symbol)
         if not data:
             log.warning("%s: no current price (possibly halted); cannot evaluate exit", symbol)
+            pos = risk.open_positions().get(symbol, {})
+            log_halt_sighting(symbol, pos.get("peak_price"), log)
             continue
 
         price = data["price"]
@@ -126,8 +129,23 @@ def manage_open_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, snap
             reason = "force exit time reached (no overnight holds)"
 
         if reason and executor.exit_position(symbol, pos["qty"], dry_run, log, reason=reason):
-            pnl = risk.record_close(symbol, price)
-            log.info("Closed %s: %s, P&L $%.2f", symbol, reason, pnl or 0.0)
+            close_info = risk.record_close(symbol, price)
+            if close_info:
+                log.info("Closed %s: %s, P&L $%.2f", symbol, reason, close_info["pnl"])
+                log_trade(
+                    symbol=symbol,
+                    entry_ts=close_info["entry_ts"],
+                    entry_price=close_info["entry_price"],
+                    qty=close_info["qty"],
+                    exit_price=price,
+                    exit_reason=reason,
+                    pnl=close_info["pnl"],
+                    peak_price=close_info["peak_price"],
+                    trough_price=close_info["trough_price"],
+                    dry_run=dry_run,
+                    entry_meta=close_info["entry_meta"],
+                    log=log,
+                )
 
 
 def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tracker: MomentumTracker):
@@ -135,6 +153,12 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         return
 
     candidates = get_runner_candidates(cfg, log, tracker)
+    # Log every sighting for research (the "runner" side of the runner/
+    # failure database), independent of whether the bot ends up trading
+    # it - risk limits below may block otherwise-qualified candidates.
+    for candidate in candidates:
+        log_candidate_snapshot(candidate, entered=False, log=log)
+
     candidates.sort(key=lambda c: c["score"], reverse=True)
 
     for candidate in candidates:
@@ -169,7 +193,14 @@ def try_open_new_positions(risk: RiskManager, cfg: dict, dry_run: bool, log, tra
         )
         result = executor.enter_position(symbol, candidate["ask_price"], dollar_amount, dry_run, log)
         if result:
-            risk.record_open(result["symbol"], result["qty"], result["price"])
+            entry_meta = {
+                "score": candidate["score"],
+                "float_shares": candidate["float_shares"],
+                "rotations_since_open": candidate["rotations_since_open"],
+                "buzz_messages_recent": candidate["buzz_messages_recent"],
+            }
+            risk.record_open(result["symbol"], result["qty"], result["price"], entry_meta)
+            log_candidate_snapshot(candidate, entered=True, log=log)
 
 
 def run_once(risk: RiskManager, cfg: dict, dry_run: bool, log, tracker: MomentumTracker):

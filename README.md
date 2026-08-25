@@ -78,6 +78,23 @@ what to trade.
   demand vs. already stalled" check, and it's what lets an already-huge
   mover still qualify, or a second wave re-ignite a name the bot already
   exited once today.
+- `src/database.py` — the runner/failure research database
+  (`state/tradeboss.db`, plain sqlite3, open it with any SQL tool or
+  `pandas.read_sql`). Three tables: `candidate_snapshots` logs **every**
+  candidate the scanner ever flags, whether traded or not (an `entered`
+  flag distinguishes them) - the "runner" side; `halt_sightings` logs
+  every time a symbol was seen halted, including a held position that
+  suddenly has no quote - the clearest "failure mode" a resting stop
+  can't handle; `trades` logs every completed trade's full outcome -
+  entry/exit price and time, exit reason and a normalized
+  `exit_category` (stop_loss/trailing/distribution/take_profit_cap/
+  force_exit_time), P&L, and MFE/MAE (how far it ran for you and against
+  you while held) - plus the candidate's score/float/rotations/buzz at
+  entry, so later analysis can ask what actually distinguished winners
+  from losers without rejoining other tables. This is what a replay
+  harness or a paper-trading sample review would query against - the
+  text log in `logs/` is for watching the bot live, this is for research
+  after the fact.
 - `src/risk_manager.py` — the guardrails: max position size, max total
   capital deployed, max concurrent positions, max trades/day, and a daily
   loss **kill switch** (halts new entries once today's realized + open P&L

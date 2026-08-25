@@ -83,12 +83,18 @@ class RiskManager:
         remaining_capacity = self.cfg["max_total_deployed_usd"] - self.deployed_usd()
         return max(0.0, min(self.cfg["max_position_size_usd"], remaining_capacity))
 
-    def record_open(self, symbol: str, qty: float, entry_price: float):
+    def record_open(self, symbol: str, qty: float, entry_price: float, entry_meta: dict | None = None):
         self.state["positions"][symbol] = {
             "qty": qty,
             "entry_price": entry_price,
             "peak_price": entry_price,
+            "trough_price": entry_price,
             "opened_at": datetime.now(ET).isoformat(),
+            # Snapshot of the candidate's scoring inputs at entry time, kept
+            # around purely so record_close can hand it to the database -
+            # lets later research ask "what distinguished winners from
+            # losers" without rejoining against candidate_snapshots.
+            "entry_meta": entry_meta or {},
         }
         self.state["trades_today"] += 1
         self._save()
@@ -104,6 +110,7 @@ class RiskManager:
             return
 
         pos["peak_price"] = max(pos.get("peak_price", pos["entry_price"]), price)
+        pos["trough_price"] = min(pos.get("trough_price", pos["entry_price"]), price)
 
         now_ts = time.time()
         last_ts = pos.get("last_sample_ts")
@@ -119,14 +126,22 @@ class RiskManager:
 
         self._save()
 
-    def record_close(self, symbol: str, exit_price: float):
+    def record_close(self, symbol: str, exit_price: float) -> dict | None:
         pos = self.state["positions"].pop(symbol, None)
         if pos is None:
-            return
+            return None
         pnl = (exit_price - pos["entry_price"]) * pos["qty"]
         self.state["realized_pnl"] += pnl
         self._save()
-        return pnl
+        return {
+            "pnl": pnl,
+            "entry_ts": pos["opened_at"],
+            "entry_price": pos["entry_price"],
+            "qty": pos["qty"],
+            "peak_price": pos.get("peak_price", pos["entry_price"]),
+            "trough_price": pos.get("trough_price", pos["entry_price"]),
+            "entry_meta": pos.get("entry_meta", {}),
+        }
 
     def open_positions(self) -> dict:
         return self.state["positions"]
