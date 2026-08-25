@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -86,9 +87,36 @@ class RiskManager:
         self.state["positions"][symbol] = {
             "qty": qty,
             "entry_price": entry_price,
+            "peak_price": entry_price,
             "opened_at": datetime.now(ET).isoformat(),
         }
         self.state["trades_today"] += 1
+        self._save()
+
+    def update_position_tracking(self, symbol: str, price: float, volume: float | None):
+        """Called each cycle for an open position. Tracks the peak price
+        reached since entry (for the trailing exit) and the peak volume
+        rate (shares/sec) seen since entry (for distribution detection -
+        exit when the pace of buying has clearly dropped off its own
+        recent high while price stalls, not some arbitrary fixed target)."""
+        pos = self.state["positions"].get(symbol)
+        if not pos:
+            return
+
+        pos["peak_price"] = max(pos.get("peak_price", pos["entry_price"]), price)
+
+        now_ts = time.time()
+        last_ts = pos.get("last_sample_ts")
+        last_vol = pos.get("last_cum_volume")
+        if volume is not None and last_ts is not None and last_vol is not None and now_ts > last_ts:
+            rate = (volume - last_vol) / (now_ts - last_ts)
+            if rate >= 0:
+                pos["last_volume_rate"] = rate
+                pos["peak_volume_rate"] = max(pos.get("peak_volume_rate", 0.0), rate)
+        if volume is not None:
+            pos["last_cum_volume"] = volume
+            pos["last_sample_ts"] = now_ts
+
         self._save()
 
     def record_close(self, symbol: str, exit_price: float):

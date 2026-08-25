@@ -2,6 +2,11 @@
 # dry_run to false. These defaults are deliberately conservative
 # placeholders, not a recommendation - they exist so the bot has *some*
 # limit instead of none. You are trading real money; read this file.
+#
+# Strategy this is tuned for ("Mr. Michael"): low-priced, tiny-market-cap,
+# low-float US stocks suddenly moving hard on abnormal volume - social
+# chatter, a weak catalyst, short covering, or no clear reason at all.
+# Same-day only, no overnight holds.
 
 # --- Safety switch -----------------------------------------------------
 # While true, the bot does everything except actually submit orders:
@@ -19,7 +24,7 @@ account_equity_usd: 2000
 # --- Risk limits (the kill switch) ---------------------------------------
 # Once realized + open unrealized loss for the day reaches this fraction
 # of account_equity_usd, the bot stops opening new positions for the rest
-# of the day. Existing positions are still managed (stop/target/EOD exit).
+# of the day. Existing positions are still managed (stop/trailing/EOD exit).
 daily_loss_limit_pct: 0.03        # 3% of account equity
 
 # Max dollars committed to a single new position.
@@ -31,29 +36,59 @@ max_total_deployed_usd: 300
 # Max number of positions open at the same time.
 max_concurrent_positions: 3
 
-# Max number of new entries the bot will make in one day, regardless of
-# signals available. Prevents runaway overtrading on a noisy day.
-max_trades_per_day: 8
+# Max number of new entries the bot will make in one day (each re-entry
+# into a symbol that ignites a second time counts against this too).
+# Prevents runaway overtrading on a noisy day.
+max_trades_per_day: 12
 
 # --- Exit rules (per position, software-managed - see README) ------------
-stop_loss_pct: 0.10        # sell if position is down 10% from entry
-take_profit_pct: 0.20      # sell if position is up 20% from entry
-# Force-flatten any open position by this time (US/Eastern, 24h). Penny
-# runners you describe have "a one day life expectancy" - don't hold
-# overnight by default.
+# Hard floor: always exit if a position moves against you this much,
+# no matter what else is happening.
+stop_loss_pct: 0.12
+
+# Primary exit for winners: sell once price has given back this much off
+# its PEAK since entry, not a fixed target - lets a real leader keep
+# running instead of capping it artificially, while still locking in
+# gains once it rolls over.
+trailing_giveback_pct: 0.15
+
+# Outer safety cap. Optional extra ceiling in case you want one on top of
+# the trailing exit; set to something like 5.0 (500%) to effectively
+# disable it and let the trailing exit do all the work.
+take_profit_cap_pct: 2.0
+
+# Distribution detection: exit if the pace of buying (shares/sec) has
+# dropped to this fraction below its own peak since entry, WHILE price
+# has stalled (see change_pct <= 2% check in main.py) - i.e. the crowd
+# that was pushing this thing up has stopped showing up.
+distribution_volume_drop_pct: 0.5   # peak rate dropping 50%+ counts as drying up
+
+# Force-flatten any open position by this time (US/Eastern, 24h). Same-day
+# only - never hold a runner overnight.
 force_exit_time_et: "15:55"
 
 # --- Scanner / entry criteria ---------------------------------------------
 # "Runner" = a low-priced stock moving hard, fast, on volume - momentum/
-# chatter driven, not fundamentals. Tune these to taste.
+# chatter driven, not fundamentals.
 scan_interval_seconds: 60
-price_min_usd: 0.50
-price_max_usd: 10.00
-min_intraday_gain_pct: 0.20          # must already be up >= 20% today
-min_relative_volume: 3.0             # today's volume vs its average volume
+price_min_usd: 0.30
+price_max_usd: 5.00          # core range is ~$0.30-$3; extends to $5 for strong movers
+min_intraday_gain_pct: 0.15  # initial trigger: must be up >= 15% today
+min_relative_volume: 3.0     # today's volume vs its average volume
+
+# Continuation / "second wave" check - a name already up 100%+ today is
+# NOT automatically too late; it's disqualified only if it looks stalled
+# right now. Once a symbol has enough scan history, it must show at least
+# this much price movement AND this much volume over the last N cycles,
+# or it's treated as stalling and skipped even if the day's total gain is
+# huge.
+momentum_lookback_cycles: 3          # ~3 scan cycles back (3 min @ 60s default)
+min_recent_price_change_pct: 0.03    # >= 3% move within that window
+min_recent_volume_shares: 5000       # >= this many shares traded in that window
+
 # Only look for NEW entries inside this US/Eastern window. Outside it the
 # bot still manages/exits existing positions but won't open new ones.
-# You noted the open is where "opportunities are unlimited" - default
-# window covers the open through late morning.
+# Left wide open (not just the first hour) since a runner can ignite, fade,
+# and reignite for a second wave later in the session.
 entry_window_start_et: "09:30"
-entry_window_end_et: "11:00"
+entry_window_end_et: "15:45"
