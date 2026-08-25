@@ -1,0 +1,59 @@
+# Copy this file to config.yaml and review EVERY value before setting
+# dry_run to false. These defaults are deliberately conservative
+# placeholders, not a recommendation - they exist so the bot has *some*
+# limit instead of none. You are trading real money; read this file.
+
+# --- Safety switch -----------------------------------------------------
+# While true, the bot does everything except actually submit orders:
+# it scans, logs what it *would* have done, and tracks paper P&L.
+# Flip to false only once you've reviewed the numbers below.
+dry_run: true
+
+# --- Account -------------------------------------------------------------
+# Your current account equity, in dollars. Used to size positions and to
+# compute the daily loss kill-switch as a percentage of equity. Update
+# this if your account balance changes materially - it is not read live
+# from Robinhood on every cycle.
+account_equity_usd: 2000
+
+# --- Risk limits (the kill switch) ---------------------------------------
+# Once realized + open unrealized loss for the day reaches this fraction
+# of account_equity_usd, the bot stops opening new positions for the rest
+# of the day. Existing positions are still managed (stop/target/EOD exit).
+daily_loss_limit_pct: 0.03        # 3% of account equity
+
+# Max dollars committed to a single new position.
+max_position_size_usd: 100
+
+# Max dollars committed across ALL open positions at once.
+max_total_deployed_usd: 300
+
+# Max number of positions open at the same time.
+max_concurrent_positions: 3
+
+# Max number of new entries the bot will make in one day, regardless of
+# signals available. Prevents runaway overtrading on a noisy day.
+max_trades_per_day: 8
+
+# --- Exit rules (per position, software-managed - see README) ------------
+stop_loss_pct: 0.10        # sell if position is down 10% from entry
+take_profit_pct: 0.20      # sell if position is up 20% from entry
+# Force-flatten any open position by this time (US/Eastern, 24h). Penny
+# runners you describe have "a one day life expectancy" - don't hold
+# overnight by default.
+force_exit_time_et: "15:55"
+
+# --- Scanner / entry criteria ---------------------------------------------
+# "Runner" = a low-priced stock moving hard, fast, on volume - momentum/
+# chatter driven, not fundamentals. Tune these to taste.
+scan_interval_seconds: 60
+price_min_usd: 0.50
+price_max_usd: 10.00
+min_intraday_gain_pct: 0.20          # must already be up >= 20% today
+min_relative_volume: 3.0             # today's volume vs its average volume
+# Only look for NEW entries inside this US/Eastern window. Outside it the
+# bot still manages/exits existing positions but won't open new ones.
+# You noted the open is where "opportunities are unlimited" - default
+# window covers the open through late morning.
+entry_window_start_et: "09:30"
+entry_window_end_et: "11:00"
